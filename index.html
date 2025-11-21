@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    
+    <!-- PWA & iOS Configuration -->
+    <title>Almond's Golden Sky</title>
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#87CEEB">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Almond">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; -webkit-touch-callout: none; user-select: none; }
+        #info {
+            position: absolute;
+            top: env(safe-area-inset-top, 20px); /* Handle iPhone Notch */
+            width: 100%;
+            text-align: center;
+            color: #443355;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            letter-spacing: 2px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-shadow: 0px 1px 2px rgba(255,255,255,0.5);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #state-display {
+            position: absolute;
+            bottom: calc(60px + env(safe-area-inset-bottom, 20px));
+            left: 20px;
+            padding: 8px 15px;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 15px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #333;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 10;
+            pointer-events: none;
+        }
+        #toggle-btn {
+            position: absolute;
+            bottom: calc(20px + env(safe-area-inset-bottom, 20px));
+            right: 20px;
+            padding: 15px 25px; /* Larger touch target for mobile */
+            background: rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.6);
+            color: #443355;
+            border-radius: 20px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: background 0.3s;
+            font-weight: bold;
+            z-index: 10;
+            font-size: 1rem;
+        }
+        #toggle-btn:active { background: rgba(255,255,255,0.6); }
+    </style>
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="info">Almond's Golden Sky</div>
+    <div id="state-display">State: IDLE</div>
+    <button id="toggle-btn">Toggle Rotation</button>
+
+    <!-- Cannon.js for Physics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // Global constants for Cat & Scene
+        const CAT_SPEED = 0.02;
+        const CAT_RUN_SPEED = 0.15;
+        const YARN_RADIUS = 0.15;
+        const CAT_HEIGHT_OFFSET = 0.145; 
+        const CHAIR_POS = new THREE.Vector3(0, 0.7 + CAT_HEIGHT_OFFSET + 0.05, 0); 
+        const NAP_DURATION = 10; // seconds
+        const ZOOMIE_DURATION = 5; // seconds
+        const PLAY_BOUNDARY_RADIUS = 14; 
+        const ROTATION_SMOOTHING = 0.1; 
+
+        // Pond constants 
+        const POND_RADIUS = 3.5;
+        const POND_X = -6;
+        const POND_Z = -5;
+        const POND_Y_OFFSET = 0.01; 
+
+        // Impulse forces 
+        const POUNCE_VERTICAL_IMPULSE = 1.0; 
+        const POUNCE_FORWARD_IMPULSE = 0.75; 
+
+        const stateDisplay = document.getElementById('state-display');
+
+        // --- Function to create Gradient ---
+        function createDayBackground() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2;
+            canvas.height = 512;
+            const context = canvas.getContext('2d');
+            
+            // Gradient: Blue (Top) -> Peach (Bottom)
+            const gradient = context.createLinearGradient(0, 0, 0, 512);
+            
+            gradient.addColorStop(0, '#aaccff');   
+            gradient.addColorStop(0.3, '#cbb3ff'); 
+            gradient.addColorStop(0.6, '#ffc4a3'); 
+            gradient.addColorStop(1, '#ffb38a');   
+
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, 2, 512);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            return texture;
+        }
+
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = createDayBackground();
+        scene.fog = new THREE.FogExp2(0xffb38a, 0.015); 
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(4, 3, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0; 
+        // Fix for mobile touch scrolling
+        renderer.domElement.style.touchAction = 'none';
+        document.body.appendChild(renderer.domElement);
+
+        // --- Controls ---
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0, 1.2, 0);
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
+
+        document.getElementById('toggle-btn').addEventListener('click', (e) => {
+            e.preventDefault(); // Prevent ghost clicks
+            controls.autoRotate = !controls.autoRotate;
+        }, { passive: false });
+
+        // --- Lighting ---
+        const hemiLight = new THREE.HemisphereLight(0xffeeb1, 0x8888aa, 0.75); 
+        scene.add(hemiLight);
+        const mainLight = new THREE.DirectionalLight(0xfff5e6, 1.1); 
+        mainLight.position.set(5, 10, 7); 
+        mainLight.castShadow = true;
+        mainLight.shadow.mapSize.width = 2048;
+        mainLight.shadow.mapSize.height = 2048;
+        mainLight.shadow.bias = -0.0001;
+        mainLight.shadow.camera.near = 0.1;
+        mainLight.shadow.camera.far = 50;
+        mainLight.shadow.camera.left = -10;
+        mainLight.shadow.camera.right = 10;
+        mainLight.shadow.camera.top = 10;
+        mainLight.shadow.camera.bottom = -10;
+        scene.add(mainLight);
+
+        // Visual Sun Object
+        const sun = new THREE.Mesh(new THREE.SphereGeometry(1.5, 32, 32), new THREE.MeshBasicMaterial({ 
+            color: 0xffddaa, transparent: true, opacity: 0.9, emissive: 0xffddaa, emissiveIntensity: 1.5 
+        }));
+        sun.position.set(15, 20, 20); 
+        scene.add(sun);
+
+        // --- Materials ---
+        const matOrange = new THREE.MeshStandardMaterial({ color: 0xe38e58, flatShading: true });
+        const matWhiteSoft = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.8 });
+        const matBlackMetal = new THREE.MeshStandardMaterial({ color: 0x333333, flatShading: true, metalness: 0.6, roughness: 0.2 });
+        const matGreen = new THREE.MeshStandardMaterial({ color: 0x6a9c5c, flatShading: true }); 
+        const matBrown = new THREE.MeshStandardMaterial({ color: 0x7d635a, flatShading: true });
+        const matRed = new THREE.MeshStandardMaterial({ color: 0xcc3333, flatShading: true });
+        const matEye = new THREE.MeshStandardMaterial({ color: 0xffffaa, flatShading: true, emissive: 0x555500 });
+        const matYarn = new THREE.MeshStandardMaterial({ color: 0xff89c4, flatShading: true, roughness: 1.0 });
+        const matRug = new THREE.MeshStandardMaterial({ color: 0xdd6666, flatShading: true });
+        const matLanternGlass = new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0xffaa00, emissiveIntensity: 1, transparent: true, opacity: 0.8 }); 
+        const matLanternMetal = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.2 });
+        // Slightly brighter/more saturated flower colors
+        const matFlowerPetalPink = new THREE.MeshStandardMaterial({ color: 0xff99bb, flatShading: true });
+        const matFlowerPetalPurple = new THREE.MeshStandardMaterial({ color: 0x7733ff, flatShading: true });
+        const matFlowerPetalYellow = new THREE.MeshStandardMaterial({ color: 0xffcc33, flatShading: true });
+        const matFlowerCenter = new THREE.MeshStandardMaterial({ color: 0xcc8800, flatShading: true });
+        const matMossPath = new THREE.MeshStandardMaterial({ color: 0x8aa86a, flatShading: true });
+        // New: Grass material (a slightly different green from the shrubs/leaves)
+        const matGrass = new THREE.MeshStandardMaterial({ color: 0x77ac66, flatShading: true, side: THREE.DoubleSide });
+
+        // Water material
+        const matWater = new THREE.MeshStandardMaterial({ 
+            color: 0x113355, 
+            flatShading: true, 
+            transparent: true, 
+            opacity: 0.8,
+            roughness: 0.3,
+            metalness: 0.5,
+        });
+
+        const matRock = new THREE.MeshStandardMaterial({ color: 0x777777, flatShading: true });
+        const matKoiOrange = new THREE.MeshStandardMaterial({ color: 0xfe6f02, flatShading: true });
+        const matKoiWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true });
+        
+
+        function createMesh(geometry, material, castShadow = true) {
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = castShadow;
+            mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        // --- 1. Environment & Static Objects ---
+        const GROUND_RADIUS = 15;
+        const groundGeo = new THREE.CylinderGeometry(GROUND_RADIUS, GROUND_RADIUS, 0.5, 32);
+        const ground = createMesh(groundGeo, new THREE.MeshStandardMaterial({ color: 0x5a7c5a, flatShading: true }));
+        ground.position.y = -0.25;
+        scene.add(ground);
+        
+        // Pond Mesh
+        const pondGeo = new THREE.CylinderGeometry(POND_RADIUS, POND_RADIUS, 0.01, 16);
+        const pond = createMesh(pondGeo, matWater, false);
+        pond.position.set(POND_X, POND_Y_OFFSET, POND_Z); 
+        pond.receiveShadow = true;
+        scene.add(pond);
+
+        // Rocks around the pond
+        function createRock(radius) {
+            return createMesh(new THREE.DodecahedronGeometry(radius), matRock);
+        }
+        const rock1 = createRock(0.8); rock1.position.set(POND_X - 3, 0.4, POND_Z - 0.5);
+        const rock2 = createRock(0.5); rock2.position.set(POND_X + 1, 0.2, POND_Z - 3.5);
+        const rock3 = createRock(0.6); rock3.position.set(POND_X + 2.5, 0.3, POND_Z + 1);
+        scene.add(rock1, rock2, rock3);
+        
+        // Mossy Path 
+        const pathGeo = new THREE.PlaneGeometry(6, 1.5);
+        const mossPath = createMesh(pathGeo, matMossPath, false);
+        mossPath.rotation.x = -Math.PI / 2;
+        mossPath.position.set(-2, 0.01, 6);
+        mossPath.rotation.z = Math.PI * 0.1;
+        scene.add(mossPath);
+
+
+        // Koi Fish
+        const koiGroup = new THREE.Group();
+        function createKoi(x, z, scale, colorMat) {
+            const fishBody = createMesh(new THREE.DodecahedronGeometry(0.15, 1), colorMat, false);
+            const fishTail = createMesh(new THREE.ConeGeometry(0.05, 0.1, 4), colorMat, false);
+            fishTail.rotation.x = Math.PI / 2;
+            fishTail.position.x = -0.15;
+            const fish = new THREE.Group();
+            fish.add(fishBody, fishTail);
+            fish.scale.set(scale, scale, scale);
+            fish.position.set(POND_X + x, POND_Y_OFFSET, POND_Z + z);
+            koiGroup.add(fish);
+            return fish;
+        }
+        const koi1 = createKoi(1.5, 1.5, 1.2, matKoiOrange); koi1.rotation.y = -Math.PI / 4;
+        const koi2 = createKoi(-1, 0.5, 1.0, matKoiWhite); koi2.rotation.y = Math.PI / 3;
+        scene.add(koiGroup);
+        
+        // --- Grass, Bush, and Flower Functions ---
+
+        /**
+         * Creates a single low-poly grass tuft (3 blades).
+         * @returns {THREE.Group}
+         */
+        function createGrassTuft() {
+            const tuft = new THREE.Group();
+            const bladeGeo = new THREE.ConeGeometry(0.05, 0.2, 3); 
+            
+            for (let i = 0; i < 3; i++) {
+                const blade = createMesh(bladeGeo, matGrass, false);
+                blade.rotation.x = Math.PI * (0.05 + Math.random() * 0.1); 
+                blade.rotation.y = Math.random() * Math.PI * 2;
+                blade.rotation.z = (Math.random() - 0.5) * 0.5;
+                blade.position.y = 0.1; // Place the base on the ground
+                blade.scale.set(1 + Math.random() * 0.3, 1 + Math.random() * 0.5, 1);
+                tuft.add(blade);
+            }
+            return tuft;
+        }
+
+        /**
+         * Creates a dense bush cluster (3 Icosahedrons).
+         * @returns {THREE.Group}
+         */
+        function createBush(scale) {
+            const bushGroup = new THREE.Group();
+            const clusterMat = new THREE.MeshStandardMaterial({ color: 0x4d6c4d, flatShading: true });
+
+            for (let i = 0; i < 3; i++) {
+                const geo = new THREE.IcosahedronGeometry(0.5 * scale, 1);
+                const mesh = createMesh(geo, clusterMat);
+                mesh.position.set(
+                    (Math.random() - 0.5) * 0.5 * scale,
+                    (0.3 + Math.random() * 0.3) * scale,
+                    (Math.random() - 0.5) * 0.5 * scale
+                );
+                mesh.rotation.set(Math.random(), Math.random(), Math.random());
+                bushGroup.add(mesh);
+            }
+            bushGroup.position.y = 0; // The components handle the height
+            return bushGroup;
+        }
+
+        // --- Grass/Bush Placement (New additions) ---
+        const GRASS_COUNT = 500;
+        const BUSH_COUNT = 12;
+
+        for (let i = 0; i < GRASS_COUNT; i++) {
+            let x, z, r;
+            do {
+                r = Math.random() * (GROUND_RADIUS - 1); // 1 unit buffer from edge
+                let theta = Math.random() * Math.PI * 2;
+                x = r * Math.cos(theta);
+                z = r * Math.sin(theta);
+                
+                // Exclude Rug area (r < 1.8) and Pond area
+            } while (Math.sqrt(x * x + z * z) < 1.8 || Math.sqrt((x - POND_X) ** 2 + (z - POND_Z) ** 2) < POND_RADIUS + 0.5);
+
+            const tuft = createGrassTuft();
+            tuft.position.set(x, 0, z);
+            tuft.rotation.y = Math.random() * Math.PI * 2;
+            scene.add(tuft);
+        }
+        
+        for (let i = 0; i < BUSH_COUNT; i++) {
+            let x, z, r;
+            const scale = 0.8 + Math.random() * 0.5;
+            do {
+                r = Math.random() * (GROUND_RADIUS - 2); 
+                let theta = Math.random() * Math.PI * 2;
+                x = r * Math.cos(theta);
+                z = r * Math.sin(theta);
+                
+                // Exclude Rug area (r < 2.5) and Pond area
+            } while (Math.sqrt(x * x + z * z) < 2.5 || Math.sqrt((x - POND_X) ** 2 + (z - POND_Z) ** 2) < POND_RADIUS + 1.5);
+
+            const bush = createBush(scale);
+            bush.position.set(x, 0, z);
+            scene.add(bush);
+        }
+        
+        // --- Flower Garden Creation Function ---
+        function createFlower(x, z, stemMat, petalMat) {
+            const stem = createMesh(new THREE.CylinderGeometry(0.01, 0.01, 0.5, 4), stemMat, false);
+            stem.position.y = 0.25;
+            const center = createMesh(new THREE.DodecahedronGeometry(0.05), matFlowerCenter, false);
+            center.position.y = 0.5;
+            const petalGeo = new THREE.BoxGeometry(0.1, 0.05, 0.01); // Use Box for a chunkier, low-poly petal
+            const flower = new THREE.Group();
+            for(let i=0; i<8; i++) {
+                const petal = createMesh(petalGeo, petalMat, false);
+                petal.position.set(0, 0.5, 0);
+                petal.rotation.z = Math.PI * 2 / 8 * i;
+                petal.translateY(0.05);
+                petal.rotation.y = Math.PI / 2; // Rotate for better flat look
+                petal.rotation.x = Math.PI / 2; // Ensure petal is upright
+                flower.add(petal);
+            }
+            flower.add(stem, center);
+            flower.position.set(x, 0, z);
+            return flower;
+        }
+
+        // Garden 1 (Original Location)
+        const garden1 = new THREE.Group();
+        garden1.add(createFlower(5.5, -4.0, matGreen, matFlowerPetalPink));
+        garden1.add(createFlower(4.8, -4.5, matGreen, matFlowerPetalPurple));
+        garden1.add(createFlower(6.2, -4.8, matGreen, matFlowerPetalYellow));
+        garden1.add(createFlower(5.0, -3.5, matGreen, matFlowerPetalPink));
+        garden1.add(createFlower(4.0, -4.0, matGreen, matFlowerPetalPurple));
+        scene.add(garden1);
+
+        // Garden 2 (Near the mossy path)
+        const garden2 = new THREE.Group();
+        garden2.add(createFlower(-3.5, 7.0, matGreen, matFlowerPetalYellow));
+        garden2.add(createFlower(-4.0, 7.5, matGreen, matFlowerPetalPink));
+        garden2.add(createFlower(-2.8, 6.8, matGreen, matFlowerPetalPurple));
+        garden2.add(createFlower(-3.0, 6.0, matGreen, matFlowerPetalYellow));
+        garden2.add(createFlower(-4.5, 6.5, matGreen, matFlowerPetalPink));
+        scene.add(garden2);
+        
+        // Decorative Shrubs (Restored and scaled up to be more visible)
+        function createShrub(x, z, scale) {
+            const shrub = createMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x4d6c4d, flatShading: true }));
+            shrub.position.set(x, 0.3, z); 
+            shrub.scale.set(scale, scale, scale);
+            shrub.rotation.set(Math.random(), Math.random(), Math.random());
+            scene.add(shrub);
+        }
+        createShrub(8, 2, 1.0);  // Larger scale
+        createShrub(10, 5, 1.4); // Larger scale
+        createShrub(-10, 3, 1.2); // Larger scale
+        
+        // Rug
+        const rug = createMesh(new THREE.CylinderGeometry(1.8, 1.8, 0.05, 16), matRug, false);
+        rug.position.set(0, 0.02, 0);
+        rug.receiveShadow = true;
+        scene.add(rug);
+        const rugInner = createMesh(new THREE.CylinderGeometry(1.2, 1.2, 0.06, 16), new THREE.MeshStandardMaterial({color: 0xffaa88}), false);
+        rugInner.position.set(0, 0.02, 0);
+        rugInner.receiveShadow = true;
+        scene.add(rugInner);
+
+        // Chair 
+        const chairGroup = new THREE.Group();
+        const legGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.6, 8);
+        [ [0.35, 0.35], [-0.35, 0.35], [0.35, -0.35], [-0.35, -0.35] ].forEach(pos => {
+            const l = createMesh(legGeo, matBlackMetal);
+            l.position.set(pos[0], 0.3, pos[1]);
+            chairGroup.add(l);
+        });
+        const b1 = createMesh(new THREE.BoxGeometry(0.7, 0.04, 0.04), matBlackMetal); b1.position.set(0, 0.1, 0.35); chairGroup.add(b1);
+        const b2 = createMesh(new THREE.BoxGeometry(0.7, 0.04, 0.04), matBlackMetal); b2.position.set(0, 0.1, -0.35); chairGroup.add(b2);
+        const b3 = createMesh(new THREE.BoxGeometry(0.04, 0.04, 0.7), matBlackMetal); b3.position.set(0.35, 0.1, 0); chairGroup.add(b3);
+        const b4 = createMesh(new THREE.BoxGeometry(0.04, 0.04, 0.7), matBlackMetal); b4.position.set(-0.35, 0.1, 0); chairGroup.add(b4);
+        
+        const seat = createMesh(new THREE.CylinderGeometry(0.55, 0.5, 0.25, 12), matWhiteSoft);
+        seat.position.set(0, 0.7, 0); seat.scale.set(1, 1, 0.9); chairGroup.add(seat);
+        const armGeo = new THREE.CapsuleGeometry(0.15, 0.5, 4, 8);
+        const armL = createMesh(armGeo, matWhiteSoft); armL.rotation.x = Math.PI/2; armL.position.set(0.45, 0.85, 0); chairGroup.add(armL);
+        const armR = createMesh(armGeo, matWhiteSoft); armR.rotation.x = Math.PI/2; armR.position.set(-0.45, 0.85, 0); chairGroup.add(armR);
+        const backBase = createMesh(new THREE.BoxGeometry(0.9, 0.6, 0.25), matWhiteSoft);
+        backBase.position.set(0, 1.1, -0.35); backBase.rotation.x = -0.15; chairGroup.add(backBase);
+        const headRest = createMesh(new THREE.BoxGeometry(0.8, 0.4, 0.2), matWhiteSoft);
+        headRest.position.set(0, 1.55, -0.45); headRest.rotation.x = -0.15; chairGroup.add(headRest);
+
+        chairGroup.rotation.y = -Math.PI / 6;
+        scene.add(chairGroup);
+        
+        // Tree, Lantern, Fireflies, Leaves
+        const treeGroup = new THREE.Group();
+        const trunk = createMesh(new THREE.CylinderGeometry(0.3, 0.5, 4, 7), matBrown);
+        trunk.position.set(-2.5, 2, -2); trunk.rotation.z = -0.1; trunk.rotation.x = 0.1; treeGroup.add(trunk);
+        function addBranch(x, y, z, rx, ry, rz, len, thick) {
+            const b = createMesh(new THREE.CylinderGeometry(thick * 0.6, thick, len, 5), matBrown);
+            b.position.set(x, y, z); b.rotation.set(rx, ry, rz); treeGroup.add(b);
+        }
+        addBranch(-2.5, 3.5, -2, 0, 0, -Math.PI/3, 3, 0.2);
+        addBranch(-1.0, 4.5, -2, 0, 0, -Math.PI/2.2, 3, 0.15);
+        function addLeafCluster(x, y, z, scale) {
+            const c = createMesh(new THREE.IcosahedronGeometry(1, 0), matGreen);
+            c.position.set(x, y, z); c.scale.set(scale, scale * 0.6, scale); c.rotation.set(Math.random(), Math.random(), Math.random()); treeGroup.add(c);
+        }
+        addLeafCluster(-2.5, 4.5, -2, 1.5); addLeafCluster(-1.5, 5.0, -1.5, 1.2); addLeafCluster(0, 5.2, -1, 1.0); addLeafCluster(-1, 4.8, 0, 0.8); addLeafCluster(0.5, 4.5, -2.5, 1.2);
+        const lanternGroup = new THREE.Group();
+        lanternGroup.add(createMesh(new THREE.CylinderGeometry(0.01, 0.01, 0.5), matBlackMetal)).position.y = 0.25;
+        const lBody = createMesh(new THREE.CylinderGeometry(0.15, 0.1, 0.3, 6), matLanternMetal); lBody.position.y = -0.15; lanternGroup.add(lBody);
+        const lGlow = new THREE.Mesh(new THREE.DodecahedronGeometry(0.08), matLanternGlass); lGlow.position.y = -0.15; lanternGroup.add(lGlow);
+        const lanternLight = new THREE.PointLight(0xffaa00, 2, 10); lanternLight.position.y = -0.2; lanternLight.castShadow = true; lanternGroup.add(lanternLight);
+        lanternGroup.position.set(0, 4.5, -1);
+        treeGroup.add(lanternGroup);
+        scene.add(treeGroup);
+        const fireflies = [];
+        for(let i=0; i<20; i++) {
+            const ff = new THREE.Mesh(new THREE.SphereGeometry(0.02, 4, 4), new THREE.MeshBasicMaterial({ color: 0xffddaa }));
+            const fy = 1 + Math.random() * 3;
+            ff.position.set((Math.random()-0.5)*8, fy, (Math.random()-0.5)*8);
+            ff.userData = { baseY: fy, speed: 0.5+Math.random(), offset: Math.random()*Math.PI*2 };
+            scene.add(ff);
+            fireflies.push(ff);
+        }
+        const leaves = [];
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0xffaa44, side: THREE.DoubleSide, flatShading: true }); 
+        for(let i=0; i<30; i++) {
+            const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.08), leafMat);
+            leaf.position.set((Math.random()-0.5)*6, 3+Math.random()*4, (Math.random()-0.5)*6);
+            leaf.userData = { speed: 0.005+Math.random()*0.02, rotationSpeed: (Math.random()-0.5)*0.1, swaySpeed: 0.5+Math.random(), swayOffset: Math.random()*Math.PI*2, initialX: leaf.position.x, initialZ: leaf.position.z };
+            scene.add(leaf);
+            leaves.push(leaf);
+        }
+
+        // --- 2. Almond (Cat) Mesh Setup ---
+        const catGroup = new THREE.Group();
+        catGroup.position.set(0, CAT_HEIGHT_OFFSET, 0); 
+
+        // Body: Rotated locally to face forward along Z-axis (upright)
+        const body = createMesh(new THREE.CylinderGeometry(0.14, 0.18, 0.5, 7), matOrange);
+        body.rotation.x = Math.PI / 2; 
+        body.rotation.z = -0.2; 
+        body.scale.z = 0.8; 
+        body.position.y = 0.05; 
+        catGroup.add(body);
+        
+        // Chest/Front 
+        const chest = createMesh(new THREE.DodecahedronGeometry(0.17, 0), matOrange);
+        chest.position.set(0, 0.05, 0.15); 
+        catGroup.add(chest);
+        
+        const headGroup = new THREE.Group();
+        // Head position
+        headGroup.position.set(0, 0.18, 0.3); 
+        const headMesh = createMesh(new THREE.DodecahedronGeometry(0.13, 0), matOrange);
+        headGroup.add(headMesh);
+        catGroup.add(headGroup);
+
+        // Head components
+        const earGeo = new THREE.ConeGeometry(0.04, 0.08, 4);
+        const earL = createMesh(earGeo, matOrange); earL.position.set(0.06, 0.1, 0); earL.rotation.set(-0.3, 0, 0.2); headGroup.add(earL);
+        const earR = createMesh(earGeo, matOrange); earR.position.set(-0.06, 0.1, 0); earR.rotation.set(-0.3, 0, -0.2); headGroup.add(earR);
+        const eyeGeo = new THREE.SphereGeometry(0.015, 4, 4);
+        const eyeL = createMesh(eyeGeo, matEye, false); eyeL.position.set(0.04, 0.02, 0.1); headGroup.add(eyeL);
+        const eyeR = createMesh(eyeGeo, matEye, false); eyeR.position.set(-0.04, 0.02, 0.1); headGroup.add(eyeR);
+        const nose = createMesh(new THREE.ConeGeometry(0.01, 0.02, 4), new THREE.MeshStandardMaterial({color: 0xffaaaa}));
+        nose.rotation.x = -Math.PI/2; nose.position.set(0, -0.01, 0.12); headGroup.add(nose);
+        const collar = createMesh(new THREE.TorusGeometry(0.13, 0.015, 4, 8), matRed);
+        collar.position.set(0, -0.10, -0.03); collar.rotation.set(Math.PI / 2, 0, 0); headGroup.add(collar); 
+        
+        // Tail components
+        const tail1 = createMesh(new THREE.CylinderGeometry(0.03, 0.03, 0.1, 5), matOrange); tail1.position.set(0, 0, -0.3); catGroup.add(tail1);
+        const tail2 = createMesh(new THREE.CylinderGeometry(0.03, 0.03, 0.1, 5), matOrange); tail2.position.set(0, 0.02, -0.4); tail2.rotation.x = 0.2; catGroup.add(tail2);
+
+        // Paws
+        const pawGeo = new THREE.BoxGeometry(0.08, 0.05, 0.06);
+        const pawFL = createMesh(pawGeo, matOrange); pawFL.position.set(0.1, -0.12, 0.25); catGroup.add(pawFL);
+        const pawFR = createMesh(pawGeo, matOrange); pawFR.position.set(-0.1, -0.12, 0.25); catGroup.add(pawFR);
+        const pawBL = createMesh(pawGeo, matOrange); pawBL.position.set(0.1, -0.12, -0.25); catGroup.add(pawBL);
+        const pawBR = createMesh(pawGeo, matOrange); pawBR.position.set(-0.1, -0.12, -0.25); catGroup.add(pawBR);
+
+        catGroup.scale.set(1.5, 1.5, 1.5);
+        
+        const catPivot = new THREE.Group();
+        catPivot.position.set(0.8, 0.0, -0.8); 
+        scene.add(catPivot);
+        catPivot.add(catGroup);
+
+        // --- 3. Yarn Mesh Setup ---
+        const yarnGroup = new THREE.Group();
+        const yarnBodyMesh = createMesh(new THREE.DodecahedronGeometry(YARN_RADIUS, 1), matYarn);
+        yarnGroup.add(yarnBodyMesh);
+        const sGeo = new THREE.TorusGeometry(YARN_RADIUS, 0.02, 4, 12, Math.PI);
+        const s1 = createMesh(sGeo, matYarn); s1.rotation.set(Math.random(), Math.random(), Math.random()); yarnGroup.add(s1);
+        const s2 = createMesh(sGeo, matYarn); s2.rotation.set(Math.random(), Math.random(), Math.random()); yarnGroup.add(s2);
+        scene.add(yarnGroup);
+
+
+        // =========================================================================
+        // === PHYSICS SETUP (Cannon.js) ===========================================
+        // =========================================================================
+        const world = new CANNON.World();
+        world.gravity.set(0, -9.82, 0);
+        world.broadphase = new CANNON.NaiveBroadphase();
+        const fixedTimeStep = 1 / 60; 
+
+        // 1. Materials
+        const groundMaterial = new CANNON.Material("groundMaterial");
+        const yarnMaterial = new CANNON.Material("yarnMaterial");
+        const contactMaterial = new CANNON.ContactMaterial(groundMaterial, yarnMaterial, {
+            friction: 0.8,
+            restitution: 0.3
+        });
+        world.addContactMaterial(contactMaterial);
+
+        // 2. Ground Body
+        const groundShape = new CANNON.Plane();
+        const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial });
+        groundBody.addShape(groundShape);
+        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); 
+        world.addBody(groundBody);
+
+        // 3. Yarn Ball Body
+        const yarnShape = new CANNON.Sphere(YARN_RADIUS);
+        const yarnCannonBody = new CANNON.Body({ mass: 3, shape: yarnShape, material: yarnMaterial }); 
+        yarnCannonBody.position.set(0.8, YARN_RADIUS, 0.8); 
+        world.addBody(yarnCannonBody);
+
+        /**
+         * Resets the yarn ball to a safe random position on the ground.
+         */
+        function resetYarnPosition() {
+            let newX, newZ;
+            let r, theta;
+            
+            // Generate a random position on the rug (radius 1.5)
+            do {
+                r = Math.random() * 1.5;
+                theta = Math.random() * Math.PI * 2;
+                newX = r * Math.cos(theta);
+                newZ = r * Math.sin(theta);
+            } while (Math.sqrt((newX - POND_X) ** 2 + (newZ - POND_Z) ** 2) < POND_RADIUS + 1); 
+
+            // Reset Cannon.js body position and velocities
+            yarnCannonBody.position.set(newX, YARN_RADIUS, newZ);
+            yarnCannonBody.velocity.set(0, 0, 0);
+            yarnCannonBody.angularVelocity.set(0, 0, 0);
+
+            // Reset Three.js mesh position (for immediate visual update)
+            yarnGroup.position.set(newX, YARN_RADIUS, newZ);
+        }
+
+
+        // =========================================================================
+        // === CAT AI (Finite State Machine) =======================================
+        // =========================================================================
+        const ALMOND_STATE = {
+            IDLE: 'IDLE',
+            WALK_RANDOM: 'WALK_RANDOM',
+            WALK_TO_YARN: 'WALK_TO_YARN',
+            POUNCE: 'POUNCE',
+            WALK_TO_CHAIR: 'WALK_TO_CHAIR',
+            NAP: 'NAP',
+            ZOOMIES: 'ZOOMIES'
+        };
+
+        let currentState = ALMOND_STATE.IDLE;
+        let stateTimer = 0;
+        let nextTarget = new THREE.Vector3().copy(catPivot.position);
+        
+        // Variables for smooth rotation
+        const tempQuaternion = new THREE.Quaternion();
+        const targetQuaternion = new THREE.Quaternion();
+        const UP_VECTOR = new THREE.Vector3(0, 1, 0);
+
+        const tempChairCenter = new THREE.Vector3(0, 0, 0); 
+
+        function setState(newState) {
+            if (currentState === newState) return;
+            currentState = newState;
+            stateTimer = 0;
+            stateDisplay.textContent = `State: ${newState.replace('_', ' ')}`;
+            
+            // Reset animations or flags upon state change
+            if (newState !== ALMOND_STATE.NAP) {
+                // If waking up or changing state from NAP, explicitly reset catGroup rotation
+                catGroup.rotation.set(0, 0, 0); 
+                // Reset head position to standing 
+                headGroup.position.set(0, 0.18, 0.3); 
+            } else {
+                // NAP: Snap to chair immediately upon entering NAP state
+                catPivot.position.copy(CHAIR_POS);
+                // Ensure Almond faces a reasonable direction on the chair
+                catPivot.lookAt(new THREE.Vector3(0, catPivot.position.y, 1)); 
+            }
+            
+            // Ensure catGroup's vertical position is correct relative to the pivot
+            if (currentState !== ALMOND_STATE.NAP) {
+                catGroup.position.y = CAT_HEIGHT_OFFSET;
+            }
+        }
+
+        /**
+         * Get a random position on the walkable ground area.
+         * Ensures the position is not too close to the rug, pond, or the edge.
+         */
+        function getRandomWalkablePosition() {
+            let x, z, r, theta;
+            do {
+                r = Math.random() * (GROUND_RADIUS - 1.5); 
+                theta = Math.random() * Math.PI * 2;
+                x = r * Math.cos(theta);
+                z = r * Math.sin(theta);
+                
+                // Exclude Rug area (r < 2.0) and Pond area
+            } while (Math.sqrt(x * x + z * z) < 2.0 || Math.sqrt((x - POND_X) ** 2 + (z - POND_Z) ** 2) < POND_RADIUS + 0.5);
+
+            return new THREE.Vector3(x, 0, z);
+        }
+
+        function checkTransitions(delta) {
+            stateTimer += delta;
+
+            switch (currentState) {
+                case ALMOND_STATE.IDLE:
+                    // Higher chance to walk somewhere now that there is more space
+                    if (Math.random() < 0.005) setState(ALMOND_STATE.WALK_RANDOM);
+                    if (Math.random() < 0.0005) setState(ALMOND_STATE.WALK_TO_CHAIR);
+                    if (Math.random() < 0.001 && yarnGroup.position.distanceTo(catPivot.position) > 0.5) setState(ALMOND_STATE.WALK_TO_YARN);
+                    if (Math.random() < 0.0003) setState(ALMOND_STATE.ZOOMIES);
+                    break;
+
+                case ALMOND_STATE.WALK_RANDOM:
+                    if (stateTimer > 10 || catPivot.position.distanceTo(nextTarget) < 0.1) setState(ALMOND_STATE.IDLE);
+                    break;
+                
+                case ALMOND_STATE.WALK_TO_YARN:
+                    if (yarnGroup.position.distanceTo(catPivot.position) < 0.5) setState(ALMOND_STATE.POUNCE);
+                    if (stateTimer > 20) setState(ALMOND_STATE.IDLE); 
+                    break;
+
+                case ALMOND_STATE.POUNCE:
+                    if (stateTimer > 3) setState(ALMOND_STATE.IDLE);
+                    break;
+
+                case ALMOND_STATE.WALK_TO_CHAIR:
+                    tempChairCenter.set(CHAIR_POS.x, catPivot.position.y, CHAIR_POS.z);
+                    
+                    if (catPivot.position.distanceTo(tempChairCenter) < 1.0) { 
+                         setState(ALMOND_STATE.NAP);
+                    }
+                    break;
+
+                case ALMOND_STATE.NAP:
+                    if (stateTimer > NAP_DURATION) setState(ALMOND_STATE.IDLE);
+                    break;
+
+                case ALMOND_STATE.ZOOMIES:
+                    if (stateTimer > ZOOMIE_DURATION) setState(ALMOND_STATE.IDLE);
+                    break;
+            }
+        }
+
+        function updateAI(delta) {
+            const catPos = catPivot.position;
+
+            // --- State Initialization/Preparation ---
+            if (currentState === ALMOND_STATE.WALK_RANDOM && stateTimer === delta) {
+                nextTarget = getRandomWalkablePosition(); // Use the new function
+                nextTarget.y = 0;
+            }
+            if (currentState === ALMOND_STATE.WALK_TO_CHAIR && stateTimer === delta) {
+                nextTarget.set(0.8, 0, 0.0); 
+            }
+            if (currentState === ALMOND_STATE.ZOOMIES && stateTimer === delta) {
+                nextTarget = getRandomWalkablePosition();
+                nextTarget.y = 0;
+            }
+            if (currentState === ALMOND_STATE.ZOOMIES && catPivot.position.distanceTo(nextTarget) < 0.5) {
+                nextTarget = getRandomWalkablePosition();
+                nextTarget.y = 0;
+            }
+
+            // --- Movement and Animation ---
+            let currentBodyY = 0;
+            
+            if (currentState.startsWith('WALK') || currentState === ALMOND_STATE.ZOOMIES) {
+                // Ensure the cat is upright and not rotated
+                catGroup.rotation.set(0, 0, 0);
+
+                if (currentState === ALMOND_STATE.WALK_TO_YARN) {
+                    nextTarget.copy(yarnGroup.position);
+                    nextTarget.y = 0; 
+                }
+                
+                const currentSpeed = currentState === ALMOND_STATE.ZOOMIES ? CAT_RUN_SPEED : CAT_SPEED;
+                
+                const direction = nextTarget.clone().sub(catPos);
+                if (direction.length() > 0.1) {
+                    direction.normalize();
+                    
+                    // 1. Move the cat
+                    catPos.x += direction.x * currentSpeed;
+                    catPos.z += direction.z * currentSpeed;
+
+                    // 2. Calculate target rotation (Turning to face the direction of travel)
+                    tempQuaternion.setFromAxisAngle(UP_VECTOR, Math.atan2(direction.x, direction.z));
+                    catPivot.quaternion.slerp(tempQuaternion, ROTATION_SMOOTHING);
+                }
+                
+                // Simple walk animation (Y-bob) - applied to catGroup.position.y relative to CAT_HEIGHT_OFFSET
+                currentBodyY = CAT_HEIGHT_OFFSET + Math.sin(stateTimer * 15) * 0.03;
+                catGroup.position.y = currentBodyY;
+                
+            } else if (currentState === ALMOND_STATE.POUNCE) {
+                const pounceDuration = 0.5;
+                if (stateTimer < pounceDuration) {
+                    const t = stateTimer / pounceDuration;
+                    
+                    // The catPivot handles the *jump* movement
+                    catPivot.position.y = Math.sin(t * Math.PI) * 0.4; 
+                    
+                    // The catGroup handles the *fixed* height offset 
+                    catGroup.position.y = CAT_HEIGHT_OFFSET; 
+                    catGroup.rotation.x = Math.PI * 0.15; // Lean forward
+
+                    if (t > 0.4 && t < 0.5) {
+                        // Apply impulses
+                        const impulse = new CANNON.Vec3(
+                            (Math.random() - 0.5) * 0.1, 
+                            POUNCE_VERTICAL_IMPULSE, 
+                            (Math.random() - 0.5) * 0.1
+                        );
+                        const catQuat = catPivot.quaternion;
+                        const catDir = new THREE.Vector3(0, 0, 1).applyQuaternion(catQuat);
+                        const forwardImpulse = new CANNON.Vec3(catDir.x * POUNCE_FORWARD_IMPULSE, 0, catDir.z * POUNCE_FORWARD_IMPULSE);
+
+                        yarnCannonBody.applyImpulse(impulse.vadd(forwardImpulse), yarnCannonBody.position);
+                    }
+                } else {
+                    catGroup.rotation.x = 0; // Reset rotation after pounce peak
+                }
+
+            } else if (currentState === ALMOND_STATE.NAP) {
+                // Nap pose animation
+                catGroup.rotation.z = -Math.PI / 2; 
+                headGroup.position.set(0, -0.05, 0.15); 
+                currentBodyY = CAT_HEIGHT_OFFSET + Math.sin(stateTimer * 2) * 0.01; 
+                catGroup.position.y = currentBodyY;
+                
+            } else {
+                // IDLE (Sitting/Standing)
+                catGroup.rotation.set(0, 0, 0); 
+                currentBodyY = CAT_HEIGHT_OFFSET + Math.sin(stateTimer * 3) * 0.005; 
+                headGroup.rotation.y = Math.sin(stateTimer * 0.5) * 0.4; 
+                headGroup.rotation.x = Math.sin(stateTimer * 0.8) * 0.1;
+                catGroup.position.y = currentBodyY;
+            }
+            
+            // --- CRITICAL GROUND SAFTEY LOCK ---
+            if (currentState !== ALMOND_STATE.NAP) {
+                catPivot.rotation.x = 0;
+                catPivot.rotation.z = 0;
+            }
+        }
+
+        // =========================================================================
+        // === Animation Loop ======================================================
+        // =========================================================================
+        const clock = new THREE.Clock();
+        const tempXZVector = new THREE.Vector2(); 
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // 1. Cat AI/FSM Update
+            checkTransitions(delta);
+            updateAI(delta);
+
+            // 2. Physics Update
+            world.step(fixedTimeStep, delta);
+
+            // 3. Yarn Boundary Check and Reset 
+            const yarnPos = yarnCannonBody.position;
+            tempXZVector.set(yarnPos.x, yarnPos.z);
+            
+            // Check 1: Outer boundary check
+            if (tempXZVector.length() > PLAY_BOUNDARY_RADIUS || yarnPos.y < YARN_RADIUS - 0.5) {
+                resetYarnPosition();
+            }
+
+            // Check 2: Water check 
+            const distanceToPondCenter = Math.sqrt((yarnPos.x - POND_X) ** 2 + (yarnPos.z - POND_Z) ** 2);
+            
+            if (distanceToPondCenter < POND_RADIUS && yarnPos.y < POND_Y_OFFSET) {
+                resetYarnPosition();
+            }
+
+            // 4. Sync Three.js and Cannon.js
+            yarnGroup.position.copy(yarnCannonBody.position);
+            yarnGroup.quaternion.copy(yarnCannonBody.quaternion);
+            
+            // 5. Enforce ground level for catPivot
+            if (currentState !== ALMOND_STATE.NAP && currentState !== ALMOND_STATE.POUNCE) {
+                catPivot.position.y = 0; 
+            } else if (currentState === ALMOND_STATE.POUNCE && stateTimer >= 0.5) {
+                catPivot.position.y = 0; 
+            }
+
+            // 6. Environment Animations
+            leaves.forEach(leaf => {
+                leaf.position.y -= leaf.userData.speed;
+                leaf.position.x = leaf.userData.initialX + Math.sin(time * leaf.userData.swaySpeed + leaf.userData.swayOffset) * 0.5;
+                leaf.position.z = leaf.userData.initialZ + Math.cos(time * leaf.userData.swaySpeed * 0.8) * 0.3;
+                leaf.rotation.x += leaf.userData.rotationSpeed; leaf.rotation.y += leaf.userData.rotationSpeed;
+                if (leaf.position.y < 0) {
+                    leaf.position.y = 5 + Math.random() * 2;
+                    leaf.position.x = (Math.random() - 0.5) * 6; leaf.userData.initialX = leaf.position.x;
+                    leaf.position.z = (Math.random() - 0.5) * 6; leaf.userData.initialZ = leaf.position.z;
+                }
+            });
+
+            fireflies.forEach(ff => {
+                ff.position.y = ff.userData.baseY + Math.sin(time * ff.userData.speed + ff.userData.offset) * 0.2;
+                ff.position.x += Math.sin(time * 0.5 + ff.userData.offset) * 0.01;
+                ff.position.z += Math.cos(time * 0.5 + ff.userData.offset) * 0.01;
+                ff.visible = Math.sin(time * 10 + ff.userData.offset) > -0.8; 
+            });
+
+            // Koi fish movement
+            koi1.position.x = POND_X + 1.5 + Math.sin(time * 0.5) * 1.0;
+            koi1.position.z = POND_Z + 1.5 + Math.cos(time * 0.5) * 1.0;
+            koi1.rotation.y = -Math.PI / 4 + Math.atan2(Math.cos(time * 0.5) * 0.5, -Math.sin(time * 0.5) * 0.5);
+
+            koi2.position.x = POND_X - 1.0 + Math.cos(time * 0.8) * 1.2;
+            koi2.position.z = POND_Z + 0.5 + Math.sin(time * 0.8) * 1.2;
+            koi2.rotation.y = Math.PI / 3 + Math.atan2(-Math.sin(time * 0.8) * 0.8, -Math.cos(time * 0.8) * 0.8);
+            
+            // Animate flowers and chair sway
+            garden1.rotation.y = Math.sin(time * 0.1) * 0.1;
+            garden2.rotation.y = Math.cos(time * 0.08) * 0.1;
+
+            chairGroup.rotation.x = Math.sin(time * 0.5) * 0.01;
+            if (currentState === ALMOND_STATE.NAP) {
+                catPivot.rotation.x = chairGroup.rotation.x;
+            } else {
+                catPivot.rotation.x = 0;
+            }
+            lanternGroup.rotation.z = Math.sin(time * 1.5) * 0.05;
+
+            // 7. Render
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initial state and start the loop
+        setState(ALMOND_STATE.IDLE);
+        animate();
+
+        // --- PWA Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then(registration => {
+                    console.log('ServiceWorker registered: ', registration);
+                }).catch(error => {
+                    console.log('ServiceWorker registration failed: ', error);
+                });
+            });
+        }
+    </script>
+</body>
+</html>
+
