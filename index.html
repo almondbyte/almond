@@ -934,6 +934,14 @@
             });
         }
     </script>
+
+<script>
+// Disable PWA install prompt
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+});
+</script>
+
 </body>
 </html>
 
